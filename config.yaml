@@ -1,0 +1,345 @@
+# ==============================================================================
+# STUDY CONFIGURATION:
+# OPTIMAL INVESTMENT AND PENSION POLICY IN PAY-AS-YOU-GO SYSTEMS
+# UNDER FORWARD UTILITY AND AGEING POPULATION
+# ==============================================================================
+# Source manuscript:
+# Alonso-Garcia, Hillairet, Kaakai, and Mrad.
+# arXiv:2605.12698v2 [q-fin.MF], 14 May 2026.
+# Author: CS Chirinda
+# ==============================================================================
+
+# ==========================================================================
+# TEMPORAL AND DEMOGRAPHIC INPUT ARCHITECTURES
+# ==========================================================================
+DEMOGRAPHIC_TRAJECTORIES:
+  metadata:
+    horizon_years: 40
+    dt: 0.008333333333333333  # 1 / 120
+    steps_per_month: 10
+    months_total: 480
+    n_time_increments: 4800
+    n_state_grid_points: 4801
+    time_index_type: "model_time_years"
+    calendar_start_date: null  # UNSPECIFIED IN MANUSCRIPT: calendar dates are not model inputs.
+    nw_scaling_unit: 100.0
+
+  RAW_DEMOGRAPHICS_SCHEMA:
+    columns:
+      - "t_years"
+      - "Nw_t"
+      - "DR_t_SS"
+      - "Nr_t_SS"
+      - "DR_t_BB"
+      - "Nr_t_BB"
+    dtype_required:
+      t_years: "float64"
+      Nw_t: "float64"
+      DR_t_SS: "float64"
+      Nr_t_SS: "float64"
+      DR_t_BB: "float64"
+      Nr_t_BB: "float64"
+    identity_constraint: "DR_t = Nr_t / Nw_t"
+
+  STEADY_STATE_SS:
+    Nw_t: 100.0
+    DR_t: 0.3
+    Nr_t: 30.0
+    trajectory_rule: "constant"
+
+  BABY_BOOM_BB:
+    Nw_t: 100.0
+    DR_t_start: 0.3
+    DR_t_end: 0.5
+    Nr_t_start: 30.0
+    Nr_t_end: 50.0
+    trajectory_rule: "linear over 40 years"
+    integer_casting: false
+
+# ==========================================================================
+# FINANCIAL AND MACRO-ECONOMIC ENGINE PARAMETERS
+# ==========================================================================
+FINANCIAL_ECONOMIC_ENGINE:
+  HESTON_STOCK_NODE:
+    S0: 1.0
+    mu_equity: 0.07
+    mu_convention: "constant mu = r0 + 0.04"
+    equity_premium_over_initial_r: 0.04
+    nu_0: 0.04
+    nu_bar: 0.04
+    kappa: 3.0
+    sigma_nu: 0.2
+    feller_condition: "sigma_nu < sqrt(2 * kappa * nu_bar)"
+    feller_holds: true
+    variance_positivity_scheme: "full_truncation"
+    # UNSPECIFIED IN MANUSCRIPT: Euler variance positivity correction not stated.
+    # Rational placeholder: use full truncation to prevent sqrt of negative variance.
+
+  VASICEK_RATE_NODE:
+    r0: 0.03
+    a_vas: 0.50
+    b_vas: 0.02
+    sigma_r: 0.02
+    rate_floor: null
+    # UNSPECIFIED IN MANUSCRIPT: no interest-rate floor is imposed.
+
+  WAGE_ECONOMY_NODE:
+    e0: 39000.0
+    e0_unit: "euros per year"
+    lambda_wage_base: 0.02
+    lambda_wage_sensitivity: [0.01, 0.02, 0.03]
+    sigma_e: 0.02
+
+  BROWNIAN_MOTION_STRUCTURE:
+    dimension: 4
+    ordering: ["S", "nu", "r", "e"]
+    components: ["B_S", "B_nu", "B_r", "B_e"]
+    increment_distribution: "Delta_B = L @ epsilon * sqrt(dt)"
+    epsilon_distribution: "standard normal N(0, I_4)"
+
+  CORRELATION_STRUCTURE:
+    rho_S_nu: -0.7
+    rho_S_r: 0.0
+    rho_S_e: 0.0
+    rho_nu_r: 0.0
+    rho_nu_e: 0.0
+    rho_r_e: 0.0
+    Gamma_matrix:
+      - [1.0, -0.7, 0.0, 0.0]
+      - [-0.7, 1.0, 0.0, 0.0]
+      - [0.0, 0.0, 1.0, 0.0]
+      - [0.0, 0.0, 0.0, 1.0]
+    Cholesky_convention: "Gamma = L @ L.T"
+    L_matrix:
+      - [1.0, 0.0, 0.0, 0.0]
+      - [-0.7, "sqrt(0.51)", 0.0, 0.0]
+      - [0.0, 0.0, 1.0, 0.0]
+      - [0.0, 0.0, 0.0, 1.0]
+
+# ==========================================================================
+# PENSION POLICY AND SUSTAINABILITY CONSTRAINTS
+# ==========================================================================
+PENSION_POLICY_CONSTRAINTS:
+  alpha: 0.15
+
+  contribution_income:
+    formula: "C_t = alpha * e_t * Nw_t"
+    C0: 585000.0
+
+  minimum_pension:
+    formula: "pmin_t = C_t / Nr_t = alpha * e_t / DR_t"
+    adequacy_constraint: "p_t >= pmin_t"
+    post_depletion_rule: "pstar_t = pmin_t"
+
+  initial_buffer:
+    F0_base: 585000.0
+    F0_rule: "F0 = C0"
+    F0_multipliers: [0.0, 0.5, 1.0, 1.5]
+
+  sustainability:
+    K0: 0.0
+    constraint: "F_t >= K_t"
+    pi_K: 0.0
+    general_K_dynamics: "dK_t = (K_t * r_t + C_t - pmin_t * Nr_t)dt + pi_K_t(dB_S_t + eta_t dt)"
+    numerical_K_simplification: "K_t = K0 * exp(int_0^t r_s ds)"
+    simplification_conditions:
+      - "pmin_t * Nr_t = C_t"
+      - "pi_K = 0"
+
+# ==========================================================================
+# SOCIAL PLANNER PREFERENCES AND FORWARD UTILITY STRUCTURE
+# ==========================================================================
+FORWARD_UTILITY_PREFERENCES:
+  CRRA_SPECIFICATIONS:
+    theta_base: 4.0
+    theta_domain: "(0, 1) union (1, infinity)"
+    theta_sensitivity_range: [0.9, 1.1, 1.5, 2.0, 3.0, 4.0, 5.0]
+    # UNSPECIFIED IN MANUSCRIPT: exact theta grid not printed in text.
+    # Rational placeholder chosen to cover low, moderate, and high risk aversion
+    # and to include the paper's threshold discussion around theta = 1.5.
+    beta: 0.03
+
+  RETIREE_UTILITY_WEIGHT:
+    Z0: 1.0e-08
+    Z0_rule: "Z0 = (1 / Nw_0) ** theta"
+    Z_t_rule: "Z_t = Z0 * exp(-beta * t)"
+
+  BUFFER_UTILITY_WEIGHT:
+    Zu_0_base: 1296.0
+    initial_generosity_target_base: 0.05
+    calibration_equation: "(Zu_0 / Z0) ** (1 / theta) = (F0 - K0) / (p0 - pmin0)"
+    base_case_equivalence: "(Zu_0 / Z0) ** (1 / theta) = 20 * Nr_0 = 600"
+    Zu_0_sensitivity_by_surplus_target:
+      surplus_6_percent: "Z0 * (Nr_0 / 0.06) ** theta"
+      surplus_5_percent: "Z0 * (Nr_0 / 0.05) ** theta"
+      surplus_4_percent: "Z0 * (Nr_0 / 0.04) ** theta"
+    Zu_0_tradeoff_reference: 14727.0
+    # Explicitly mentioned in manuscript as approximate optimum at T = 30.
+
+  VOLATILITY_SENSITIVITIES_DELTA:
+    baseline: [0.0, -0.2, -0.2, -0.2]
+    ordering: ["delta_S", "delta_nu", "delta_r", "delta_e"]
+    transformed_baseline_tL_delta: [0.14, -0.1428, -0.2, -0.2]
+    comparison_zero_delta: [0.0, 0.0, 0.0, 0.0]
+    comparison_positive_wage_delta: [0.0, -0.2, -0.2, 0.2]
+    hedgeable_component: "(L.T @ delta)[0]"
+    nonhedgeable_component: "(L.T @ delta)[1:4]"
+
+  INTERGENERATIONAL_WEIGHTING:
+    baseline: "omega_t = 1"
+    cohort_weighted: "omega_t = DR_t / DR_0 = Nr_t / Nr_0"
+    baseline_used_for_main_SS_BB_comparison: true
+
+# ==========================================================================
+# CORE MODEL EQUATIONS USED BY THE POLICY CONTROLLER
+# ==========================================================================
+EQUATION_REGISTRY:
+  market_price_of_risk: "eta_t = (mu_t - r_t) / sqrt(nu_t)"
+  buffer_utility: "U(t,x) = Zu_t * ((x - K_t) ** (1 - theta)) / (1 - theta)"
+  retiree_utility: "V(t,p) = Nr_t * omega_t * Z_t * ((p - pmin_t) ** (1 - theta)) / (1 - theta)"
+  HJB_Zu_dynamics: "dZu_t = Zu_t * ( -[(1-theta)r_t + ((1-theta)/(2theta))*((L.T delta)_S + eta_t)^2 + theta * Nr_t * ((Z_t omega_t / Zu_t) ** (1/theta))]dt + delta_t dot dB_t )"
+  optimal_investment: "pi_star_t = pi_K_t + ((F_star_t - K_t) / theta) * ((L.T delta_t)_S + eta_t) * 1_{t < tau_Z}"
+  optimal_pension: "p_star_t = pmin_t + (F_star_t - K_t) * ((Z_t * omega_t / Zu_t) ** (1/theta)) * 1_{t < tau_Z}"
+  optimal_fund_dynamics: "dF_star_t = dK_t + (F_star_t - K_t) * [(r_t - Nr_t * ((Z_t omega_t / Zu_t) ** (1/theta)))dt + (1/theta)((L.T delta_t)_S + eta_t)(dB_S_t + eta_t dt)]"
+  depletion_time: "tau = inf{t >= 0 : F_star_t = K_t} = inf{t >= 0 : Zu_t = 0}"
+  depletion_integral: "tau = inf{t : int_0^t Nr_s * ((Z_s omega_s xi_s / Zu_0) ** (1/theta)) ds >= 1}"
+
+# ==========================================================================
+# ALGORITHM AND SIMULATION CONTROL PARAMETERS
+# ==========================================================================
+SIMULATION_CONTROL:
+  MONTE_CARLO:
+    Nsim: 10000
+    seed_optimistic_path: 3
+    seed_pessimistic_path: 5
+    monte_carlo_seed: 12345
+    # UNSPECIFIED IN MANUSCRIPT: global Monte Carlo RNG seed not reported.
+    # Rational placeholder for reproducible implementation.
+    rng_algorithm: "PCG64"
+    # UNSPECIFIED IN MANUSCRIPT: random generator not reported.
+    # Rational placeholder: NumPy default modern generator.
+
+  DISCRETIZATION:
+    method: "Euler-Maruyama"
+    dt: 0.008333333333333333  # 1 / 120
+    time_grid: "t_n = n / 120 for n = 0, ..., 4800"
+    state_points: 4801
+    increments: 4800
+    annual_report_indices: "integer years t = 0, 1, ..., 40"
+    # UNSPECIFIED IN MANUSCRIPT: exact reporting index convention not printed.
+    # Rational placeholder: sample at integer model years.
+
+  HESTON_NUMERICAL_CONVENTIONS:
+    variance_floor: 0.0
+    sqrt_variance_rule: "sqrt(max(nu_t, 0))"
+    variance_update_rule: "full truncation Euler"
+    # UNSPECIFIED IN MANUSCRIPT: exact Euler positivity convention not printed.
+
+  STOPPING_CONVENTIONS:
+    depletion_condition: "F_star_t <= K_t or Zu_t <= 0"
+    # UNSPECIFIED IN MANUSCRIPT: equality is theoretical; discrete simulation needs <=.
+    after_depletion_pension: "p_star_t = pmin_t"
+    after_depletion_risky_investment: "pi_star_t = 0"
+    # UNSPECIFIED IN MANUSCRIPT: operational convention after depletion.
+    indicator_rule: "1_{t < tau_Z}"
+
+# ==========================================================================
+# METHODOLOGY AND EVALUATION
+# ==========================================================================
+METHODOLOGY_EVALUATION:
+  PRIMARY_METRICS:
+    Benefit_Ratio: "BR_t = p_star_t / e_t"
+    Relative_Increase: "rho_t = (p_star_t - pmin_t) / pmin_t"
+    Depletion_Time: "tau = inf{t : F_star_t = K_t}"
+    Survival_Function: "P(tau > t)"
+    EAIR: "sum_i c_{s_i} = c_{s_1} * sum_i (1 + y) ** (s_i - s_1)"
+
+  EAIR_CONVENTIONS:
+    cashflow_buffer_fund: "c = p_star"
+    cashflow_pure_PAYG: "c = pmin"
+    sampling_frequency: "annual"
+    sampling_times: "s_i = 0, 1, ..., t"
+    # UNSPECIFIED IN MANUSCRIPT: exact annual sampling convention not printed.
+    solver: "brentq"
+    # UNSPECIFIED IN MANUSCRIPT: root-finder not printed.
+    bracket: [-0.99, 1.00]
+    # UNSPECIFIED IN MANUSCRIPT: numerical bracket not printed.
+    tolerances:
+      absolute: 1.0e-10
+      relative: 1.0e-10
+    # UNSPECIFIED IN MANUSCRIPT: solver tolerances not printed.
+
+  MONTE_CARLO_SUMMARIES:
+    mean: true
+    median: true
+    IQR: [0.25, 0.75]
+    selected_percentiles: [0.05, 0.50, 0.95]
+    # UNSPECIFIED IN MANUSCRIPT: exact EAIR selected percentiles not fully printed.
+
+  CONDITIONAL_DISTRIBUTIONS:
+    solvent_condition: "F_star_t > 0"
+    depleted_condition: "F_star_t = 0"
+    objects:
+      - "pmin_t | F_star_t > 0"
+      - "pmin_t | F_star_t = 0"
+      - "p_star_t | F_star_t > 0"
+      - "p_star_t | F_star_t = 0"
+    evaluation_time: 20
+
+  PLOT_PARAMETERS:
+    solid_lines: "empirical mean"
+    dashed_lines: "empirical median"
+    shaded_area: "IQR, 25th to 75th percentile"
+    dotted_lines: "survival function of buffer depletion time"
+
+# ==========================================================================
+# REPRODUCTION EXPERIMENT MATRIX
+# ==========================================================================
+EXPERIMENT_MATRIX:
+  main_demographic_comparison:
+    demographies: ["SS", "BB"]
+    omega: "omega_t = 1"
+    delta: [0.0, -0.2, -0.2, -0.2]
+    F0: "1.0 * C0"
+    lambda_wage: 0.02
+    theta: 4.0
+    Zu_0: 1296.0
+
+  delta_sensitivity:
+    demography: "BB"
+    delta_cases:
+      - [0.0, 0.0, 0.0, 0.0]
+      - [0.0, -0.2, -0.2, -0.2]
+      - [0.0, -0.2, -0.2, 0.2]
+
+  Zu_0_tradeoff:
+    demography: "BB"
+    initial_surplus_targets: [0.06, 0.05, 0.04]
+    pathwise_seed: 3
+
+  F0_lambda_sensitivity:
+    demography: "BB"
+    F0_multipliers: [0.0, 0.5, 1.0, 1.5]
+    lambda_values: [0.01, 0.02, 0.03]
+    Zu_0_fixed: 1296.0
+
+  omega_sensitivity:
+    demography: "BB"
+    omega_cases:
+      - "omega_t = 1"
+      - "omega_t = DR_t / DR_0"
+
+  theta_sensitivity:
+    demography: "BB"
+    theta_values: [0.9, 1.1, 1.5, 2.0, 3.0, 4.0, 5.0]
+    # UNSPECIFIED IN MANUSCRIPT: exact theta grid not printed.
+    calibration_rule: "recalibrate Zu_0 for p0 = 1.05 * pmin0 for each theta"
+
+# ==========================================================================
+# NON-APPLICABLE ARCHITECTURES
+# ==========================================================================
+NON_APPLICABLE_METHODS:
+  neural_network_architecture: null
+  LLM_prompt_template: null
+  LLM_settings: null
+  note: "The manuscript contains no neural network, no LLM pipeline, and no prompt-template method."
